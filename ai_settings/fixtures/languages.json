@@ -1,0 +1,12 @@
+[
+  {"model": "ai_settings.supportedlanguage", "pk": 1, "fields": {"code": "ru", "name": "Russian", "native_name": "Русский", "is_active": true}},
+  {"model": "ai_settings.supportedlanguage", "pk": 2, "fields": {"code": "en", "name": "English", "native_name": "English", "is_active": true}},
+  {"model": "ai_settings.supportedlanguage", "pk": 3, "fields": {"code": "uz", "name": "Uzbek", "native_name": "O'zbek", "is_active": true}},
+  {"model": "ai_settings.supportedlanguage", "pk": 4, "fields": {"code": "tg", "name": "Tajik", "native_name": "Тоҷикӣ", "is_active": true}},
+  {"model": "ai_settings.supportedlanguage", "pk": 5, "fields": {"code": "de", "name": "German", "native_name": "Deutsch", "is_active": true}},
+  {"model": "ai_settings.supportedlanguage", "pk": 6, "fields": {"code": "fr", "name": "French", "native_name": "Français", "is_active": true}},
+  {"model": "ai_settings.supportedlanguage", "pk": 7, "fields": {"code": "ar", "name": "Arabic", "native_name": "العربية", "is_active": true}},
+  {"model": "ai_settings.supportedlanguage", "pk": 8, "fields": {"code": "zh", "name": "Chinese", "native_name": "中文", "is_active": true}},
+  {"model": "ai_settings.supportedlanguage", "pk": 9, "fields": {"code": "tr", "name": "Turkish", "native_name": "Türkçe", "is_active": true}},
+  {"model": "ai_settings.supportedlanguage", "pk": 10, "fields": {"code": "es", "name": "Spanish", "native_name": "Español", "is_active": true}}
+]
