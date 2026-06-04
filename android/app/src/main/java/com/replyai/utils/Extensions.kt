@@ -6,6 +6,7 @@ import android.content.Context
 import android.view.View
 import android.widget.Toast
 import com.google.android.material.snackbar.Snackbar
+import com.replyai.data.models.ToneChoices
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
@@ -21,7 +22,7 @@ fun Context.showToast(message: String) {
 fun Context.copyToClipboard(label: String, text: String) {
     val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
-    showToast("Copied to clipboard")
+    showToast("Скопировано")
 }
 
 fun String?.formatApiDate(): String {
@@ -30,7 +31,7 @@ fun String?.formatApiDate(): String {
         val input = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
             timeZone = TimeZone.getTimeZone("UTC")
         }
-        val output = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault())
+        val output = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault())
         val date = input.parse(this.substringBefore('+').substringBefore('Z')) ?: return this
         output.format(date)
     } catch (_: Exception) {
@@ -38,30 +39,42 @@ fun String?.formatApiDate(): String {
     }
 }
 
-/**
- * Maps UI tone chips to API values.
- * UI: formal | friendly | empathic → API: formal | friendly | empathetic
- * (Django accepts "empathetic", not "empathic")
- */
-fun String.toApiTone(): String = when (this.lowercase()) {
-    "formal" -> "formal"
-    "friendly" -> "friendly"
-    "empathic", "empathetic" -> "empathetic"
-    else -> "friendly"
-}
+/** @see ToneChoices.toApiValue */
+fun String.toApiTone(): String = ToneChoices.toApiValue(this)
 
-fun String.toDisplayTone(): String = when (this.lowercase()) {
-    "formal" -> "Formal"
-    "friendly" -> "Friendly"
-    "empathetic", "empathic" -> "Empathic"
-    "neutral" -> "Neutral"
-    "assertive" -> "Assertive"
-    else -> this.replaceFirstChar { it.uppercase() }
+fun String.toDisplayTone(): String = when (ToneChoices.toApiValue(this)) {
+    ToneChoices.FORMAL -> "Формальный"
+    ToneChoices.FRIENDLY -> "Дружеский"
+    ToneChoices.NEUTRAL -> "Нейтральный"
+    ToneChoices.ASSERTIVE -> "Уверенный"
+    ToneChoices.EMPATHETIC -> "Эмпатичный"
+    ToneChoices.EMPTY -> "—"
+    else -> this
 }
 
 fun String.messengerIconRes(): Int = when (this.lowercase()) {
     "telegram" -> com.replyai.R.drawable.ic_telegram
     "instagram" -> com.replyai.R.drawable.ic_instagram
     "whatsapp" -> com.replyai.R.drawable.ic_whatsapp
-    else -> com.replyai.R.drawable.ic_chat
+    else -> com.replyai.R.drawable.ic_reply_ai
+}
+
+fun String.messengerFromPackage(packageName: String): String = when {
+    packageName.contains("telegram") -> "telegram"
+    packageName.contains("instagram") -> "instagram"
+    packageName.contains("whatsapp") -> "whatsapp"
+    else -> "telegram"
+}
+
+fun parseApiError(body: String?): String {
+    if (body.isNullOrBlank()) return "Ошибка запроса"
+    return try {
+        val fieldErrors = Regex(""""(\w+)"\s*:\s*\["([^"]+)"/""").findAll(body)
+            .map { "${it.groupValues[1]}: ${it.groupValues[2]}" }
+            .joinToString("; ")
+        if (fieldErrors.isNotBlank()) return fieldErrors
+        Regex(""""detail"\s*:\s*"([^"]+)"""").find(body)?.groupValues?.get(1) ?: body.take(200)
+    } catch (_: Exception) {
+        body.take(200)
+    }
 }

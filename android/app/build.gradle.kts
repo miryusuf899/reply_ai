@@ -1,6 +1,8 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.google.dagger.hilt.android")
+    kotlin("kapt")
 }
 
 android {
@@ -11,9 +13,14 @@ android {
         applicationId = "com.replyai"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "2.0.0"
         buildConfigField("String", "BASE_URL", "\"http://31.25.238.184:8005/api/\"")
+        buildConfigField(
+            "String",
+            "GOOGLE_WEB_CLIENT_ID",
+            "\"875429944075-dqadg7qd90lt7q3sm7iv7nqvhs3pqotn.apps.googleusercontent.com\""
+        )
     }
 
     buildTypes {
@@ -63,7 +70,18 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
+    implementation("com.google.dagger:hilt-android:2.50")
+    kapt("com.google.dagger:hilt-compiler:2.50")
+
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+
+    implementation("com.google.android.gms:play-services-auth:21.0.0")
+    implementation("com.airbnb.android:lottie:6.3.0")
+    implementation("com.facebook.shimmer:shimmer:0.5.0")
+}
+
+kapt {
+    correctErrorTypes = true
 }

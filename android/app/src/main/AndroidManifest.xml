@@ -10,10 +10,10 @@
     <application
         android:name=".ReplyAIApp"
         android:allowBackup="true"
-        android:icon="@drawable/ic_logo"
+        android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:roundIcon="@drawable/ic_logo"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.ReplyAI"
         tools:targetApi="34">
@@ -47,10 +47,6 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
-        <activity
-            android:name=".ui.settings.SettingsActivity"
-            android:exported="false" />
-
         <service
             android:name=".service.FloatingOverlayService"
             android:exported="false"
@@ -71,6 +67,5 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
-
     </application>
 </manifest>

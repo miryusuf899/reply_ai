@@ -46,10 +46,20 @@
                 android:textSize="13sp" />
         </LinearLayout>
 
+        <ImageButton
+            android:id="@+id/btnFavorite"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/favorite"
+            android:src="@drawable/ic_star"
+            app:tint="@color/text_hint" />
+
         <TextView
             android:id="@+id/tvTime"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
             android:textColor="@color/text_hint"
             android:textSize="12sp" />
     </LinearLayout>

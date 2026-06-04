@@ -19,73 +19,79 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.replyai.R
-import com.replyai.databinding.OverlayBubbleBinding
-import com.replyai.databinding.OverlayPanelBinding
-import com.replyai.data.models.AskRequest
+import com.replyai.data.models.RequestTypes
+import com.replyai.data.models.ToneChoices
 import com.replyai.data.repository.ChatRepository
+import com.replyai.databinding.OverlayBubbleBinding
+import com.replyai.databinding.OverlayGenerateBinding
+import com.replyai.databinding.OverlayMenuBinding
 import com.replyai.ui.main.MainActivity
 import com.replyai.utils.copyToClipboard
+import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import javax.inject.Inject
 import kotlin.math.abs
 
+@AndroidEntryPoint
 class FloatingOverlayService : Service() {
+
+    @Inject lateinit var overlayWorkflow: OverlayWorkflow
+    @Inject lateinit var chatRepository: ChatRepository
 
     private lateinit var windowManager: WindowManager
     private var bubbleView: View? = null
-    private var panelView: View? = null
-    private var bubbleBinding: OverlayBubbleBinding? = null
-    private var panelBinding: OverlayPanelBinding? = null
-    private var isExpanded = false
+    private var overlayView: View? = null
+    private var bubbleParams: WindowManager.LayoutParams? = null
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val chatRepository = ChatRepository()
-
-    private var layoutParams: WindowManager.LayoutParams? = null
-    private var selectedTone = "friendly"
-    private var overlaySessionId: String? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var selectedRequestType = RequestTypes.REPLY_HELP
+    /** Backend tone key: formal | friendly | neutral | assertive | empathetic */
+    private var selectedTone = ToneChoices.FRIENDLY
+    private var lastResponseId: String? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        startForeground(NOTIFICATION_ID, createNotification())
+        createNotificationChannel()
+        startForeground(NOTIFICATION_ID, buildNotification())
         showBubble()
-        ensureOverlaySession()
     }
 
     override fun onDestroy() {
         removeBubble()
-        removePanel()
-        serviceScope.cancel()
+        removeOverlay()
+        scope.cancel()
         super.onDestroy()
     }
 
     @SuppressLint("ClickableViewAccessibility")
     private fun showBubble() {
-        bubbleBinding = OverlayBubbleBinding.inflate(LayoutInflater.from(this))
-        bubbleView = bubbleBinding!!.root
+        val binding = OverlayBubbleBinding.inflate(LayoutInflater.from(this))
+        bubbleView = binding.root
+        binding.ivBubble.setImageResource(R.drawable.ic_reply_ai)
 
-        layoutParams = WindowManager.LayoutParams(
+        bubbleParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
-            overlayWindowType(),
+            overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = 0
-            y = 300
+            y = 400
         }
 
-        var initialX = 0
-        var initialY = 0
+        var initX = 0
+        var initY = 0
         var touchX = 0f
         var touchY = 0f
         var moved = false
@@ -93,8 +99,8 @@ class FloatingOverlayService : Service() {
         bubbleView!!.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    initialX = layoutParams!!.x
-                    initialY = layoutParams!!.y
+                    initX = bubbleParams!!.x
+                    initY = bubbleParams!!.y
                     touchX = event.rawX
                     touchY = event.rawY
                     moved = false
@@ -103,153 +109,190 @@ class FloatingOverlayService : Service() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - touchX).toInt()
                     val dy = (event.rawY - touchY).toInt()
-                    if (abs(dx) > 5 || abs(dy) > 5) moved = true
-                    layoutParams!!.x = initialX + dx
-                    layoutParams!!.y = initialY + dy
-                    windowManager.updateViewLayout(bubbleView, layoutParams)
+                    if (abs(dx) > 4 || abs(dy) > 4) moved = true
+                    bubbleParams!!.x = initX + dx
+                    bubbleParams!!.y = initY + dy
+                    windowManager.updateViewLayout(bubbleView, bubbleParams)
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!moved) togglePanel()
-                    snapToEdge()
+                    if (!moved) showMenuSheet() else snapToEdge()
                     true
                 }
                 else -> false
             }
         }
 
-        windowManager.addView(bubbleView, layoutParams)
+        windowManager.addView(bubbleView, bubbleParams)
     }
 
     private fun snapToEdge() {
-        val display = resources.displayMetrics
-        val centerX = display.widthPixels / 2
-        layoutParams?.let { params ->
-            params.x = if (params.x + (bubbleView?.width ?: 0) / 2 < centerX) 0
-            else display.widthPixels - (bubbleView?.width ?: 120)
-            windowManager.updateViewLayout(bubbleView, params)
+        val w = resources.displayMetrics.widthPixels
+        bubbleParams?.let { p ->
+            p.x = if (p.x < w / 2) 0 else w - (bubbleView?.width ?: 140)
+            windowManager.updateViewLayout(bubbleView, p)
         }
     }
 
-    private fun togglePanel() {
-        if (isExpanded) collapsePanel() else expandPanel()
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private fun expandPanel() {
-        if (panelView != null) return
-        isExpanded = true
+    private fun showMenuSheet() {
+        removeOverlay()
         bubbleView?.visibility = View.GONE
 
-        panelBinding = OverlayPanelBinding.inflate(LayoutInflater.from(this))
-        panelView = panelBinding!!.root
+        val binding = OverlayMenuBinding.inflate(LayoutInflater.from(android.view.ContextThemeWrapper(this, R.style.Theme_ReplyAI)))
+        overlayView = binding.root
 
-        val panelParams = WindowManager.LayoutParams(
-            (resources.displayMetrics.widthPixels * 0.9).toInt(),
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            overlayWindowType(),
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.CENTER
-        }
+        binding.btnCloseMenu.setOnClickListener { closeOverlay() }
+        binding.btnReplyHelp.setOnClickListener { openGenerateSheet(RequestTypes.REPLY_HELP) }
+        binding.btnTranslate.setOnClickListener { openGenerateSheet(RequestTypes.TRANSLATION) }
+        binding.btnToneChange.setOnClickListener { openGenerateSheet(RequestTypes.TONE_CHANGE) }
+        binding.btnAnalyze.setOnClickListener { openGenerateSheet(RequestTypes.ANALYZE) }
 
-        setupPanelActions()
-
-        panelBinding!!.btnClose.setOnClickListener { collapsePanel() }
-
-        windowManager.addView(panelView, panelParams)
+        addOverlay(binding.root)
     }
 
-    private fun setupPanelActions() {
-        val binding = panelBinding ?: return
+    private fun openGenerateSheet(requestType: String) {
+        selectedRequestType = requestType
+        removeOverlay()
 
-        binding.chipFormal.setOnClickListener { selectOverlayTone("formal") }
-        binding.chipFriendly.setOnClickListener { selectOverlayTone("friendly") }
-        binding.chipEmpathic.setOnClickListener { selectOverlayTone("empathic") }
-        selectOverlayTone("friendly")
+        val binding = OverlayGenerateBinding.inflate(LayoutInflater.from(android.view.ContextThemeWrapper(this, R.style.Theme_ReplyAI)))
+        overlayView = binding.root
 
+        binding.tvActionTitle.text = overlayWorkflow.requestTypeLabel(requestType)
+        binding.tvContextStatus.text = getString(R.string.messages_syncing)
+
+        setupToneChips(binding)
+        selectToneChip(binding, ToneChoices.FRIENDLY)
+
+        scope.launch {
+            val count = withContext(Dispatchers.IO) {
+                ReplyAIAccessibilityService.forceRefreshMessages()
+            }
+            binding.tvContextStatus.text = getString(R.string.messages_synced, count)
+        }
+
+        binding.btnBack.setOnClickListener { showMenuSheet() }
         binding.btnGenerate.setOnClickListener {
-            val prompt = binding.etInput.text?.toString()?.trim().orEmpty()
+            val prompt = binding.etPrompt.text?.toString()?.trim().orEmpty()
             if (prompt.isBlank()) {
-                Toast.makeText(this, "Enter your message context", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.overlay_prompt_hint), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            generateReply(prompt)
+            generate(binding, prompt)
         }
 
         binding.btnCopy.setOnClickListener {
             val text = binding.tvResult.text?.toString().orEmpty()
-            if (text.isNotBlank()) copyToClipboard("AI Reply", text)
+            if (text.isNotBlank()) copyToClipboard("Reply AI", text)
         }
 
-        binding.btnInsert.setOnClickListener {
-            val text = binding.tvResult.text?.toString().orEmpty()
-            if (text.isNotBlank()) {
-                ReplyAIAccessibilityService.insertText(text)
-                collapsePanel()
-            }
-        }
+        binding.btnLike.setOnClickListener { sendFeedback(1) }
+        binding.btnDislike.setOnClickListener { sendFeedback(-1) }
+        binding.btnFavorite.setOnClickListener { saveFavorite() }
+
+        addOverlay(binding.root)
     }
 
-    private fun selectOverlayTone(tone: String) {
-        selectedTone = tone
-        panelBinding?.chipFormal?.isChecked = tone == "formal"
-        panelBinding?.chipFriendly?.isChecked = tone == "friendly"
-        panelBinding?.chipEmpathic?.isChecked = tone == "empathic"
-    }
+    private fun generate(binding: OverlayGenerateBinding, prompt: String) {
+        binding.loadingContainer.visibility = View.VISIBLE
+        binding.lottieLoading.playAnimation()
+        binding.btnGenerate.isEnabled = false
+        binding.cardResult.visibility = View.GONE
 
-    private fun generateReply(prompt: String) {
-        val sessionId = overlaySessionId
-        if (sessionId == null) {
-            Toast.makeText(this, "No active session", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        panelBinding?.progressBar?.visibility = View.VISIBLE
-        panelBinding?.btnGenerate?.isEnabled = false
-
-        serviceScope.launch {
+        scope.launch {
             val result = withContext(Dispatchers.IO) {
-                chatRepository.askAI(
-                    sessionId = sessionId,
+                overlayWorkflow.run(
+                    requestType = selectedRequestType,
                     userPrompt = prompt,
-                    tone = selectedTone,
-                    requestType = AskRequest.REQUEST_TYPE_REPLY_HELP
+                    tone = selectedTone
                 )
             }
-            panelBinding?.progressBar?.visibility = View.GONE
-            panelBinding?.btnGenerate?.isEnabled = true
+            binding.loadingContainer.visibility = View.GONE
+            binding.lottieLoading.cancelAnimation()
+            binding.btnGenerate.isEnabled = true
 
-            result.onSuccess { response ->
-                val text = response.response?.generatedText.orEmpty()
-                panelBinding?.tvResult?.text = text
-                panelBinding?.cardResult?.visibility = if (text.isNotBlank()) View.VISIBLE else View.GONE
-            }.onFailure {
-                Toast.makeText(this@FloatingOverlayService, it.message ?: "Error", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun ensureOverlaySession() {
-        serviceScope.launch {
-            val sessions = withContext(Dispatchers.IO) {
-                chatRepository.getSessions().getOrNull()
-            }
-            overlaySessionId = sessions?.firstOrNull()?.id
-            if (overlaySessionId == null) {
-                val created = withContext(Dispatchers.IO) {
-                    chatRepository.createSession("telegram", "Overlay Quick Reply").getOrNull()
+            result.onSuccess { overlayResult ->
+                lastResponseId = overlayResult.responseId
+                binding.tvResult.text = overlayResult.generatedText
+                binding.cardResult.visibility = View.VISIBLE
+                // Скрываем overlay и вставляем текст с задержкой
+                val generatedText = overlayResult.generatedText
+                removeOverlay()
+                delay(300)
+                val inserted = ReplyAIAccessibilityService.insertText(generatedText)
+                val msg = if (inserted) {
+                    getString(R.string.text_injected)
+                } else {
+                    getString(R.string.insert_failed)
                 }
-                overlaySessionId = created?.id
+                Toast.makeText(this@FloatingOverlayService, msg, Toast.LENGTH_LONG).show()
+            }.onFailure {
+                Toast.makeText(
+                    this@FloatingOverlayService,
+                    it.message ?: "Ошибка",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
 
-    private fun collapsePanel() {
-        isExpanded = false
-        removePanel()
+    private fun sendFeedback(value: Int) {
+        val id = lastResponseId ?: return
+        scope.launch {
+            chatRepository.sendFeedback(id, feedback = value)
+                .onSuccess { Toast.makeText(this@FloatingOverlayService, "👍", Toast.LENGTH_SHORT).show() }
+                .onFailure { Toast.makeText(this@FloatingOverlayService, it.message, Toast.LENGTH_SHORT).show() }
+        }
+    }
+
+    private fun saveFavorite() {
+        val id = lastResponseId ?: return
+        scope.launch {
+            chatRepository.sendFeedback(id, isFavorite = true)
+                .onSuccess {
+                    Toast.makeText(this@FloatingOverlayService, getString(R.string.favorite), Toast.LENGTH_SHORT).show()
+                }
+                .onFailure { Toast.makeText(this@FloatingOverlayService, it.message, Toast.LENGTH_SHORT).show() }
+        }
+    }
+
+    private fun setupToneChips(binding: OverlayGenerateBinding) {
+        binding.chipFormal.setOnClickListener { selectToneChip(binding, ToneChoices.FORMAL) }
+        binding.chipFriendly.setOnClickListener { selectToneChip(binding, ToneChoices.FRIENDLY) }
+        binding.chipNeutral.setOnClickListener { selectToneChip(binding, ToneChoices.NEUTRAL) }
+        binding.chipAssertive.setOnClickListener { selectToneChip(binding, ToneChoices.ASSERTIVE) }
+        binding.chipEmpathic.setOnClickListener { selectToneChip(binding, ToneChoices.EMPATHETIC) }
+    }
+
+    private fun selectToneChip(binding: OverlayGenerateBinding, apiTone: String) {
+        selectedTone = ToneChoices.toApiValue(apiTone)
+        binding.chipFormal.isChecked = selectedTone == ToneChoices.FORMAL
+        binding.chipFriendly.isChecked = selectedTone == ToneChoices.FRIENDLY
+        binding.chipNeutral.isChecked = selectedTone == ToneChoices.NEUTRAL
+        binding.chipAssertive.isChecked = selectedTone == ToneChoices.ASSERTIVE
+        binding.chipEmpathic.isChecked = selectedTone == ToneChoices.EMPATHETIC
+    }
+
+    private fun addOverlay(view: View) {
+        val params = WindowManager.LayoutParams(
+            (resources.displayMetrics.widthPixels * 0.92).toInt(),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.CENTER }
+        windowManager.addView(view, params)
+    }
+
+    private fun closeOverlay() {
+        removeOverlay()
         bubbleView?.visibility = View.VISIBLE
+    }
+
+    private fun removeOverlay() {
+        overlayView?.let {
+            try { windowManager.removeView(it) } catch (_: Exception) {}
+        }
+        overlayView = null
     }
 
     private fun removeBubble() {
@@ -257,63 +300,48 @@ class FloatingOverlayService : Service() {
             try { windowManager.removeView(it) } catch (_: Exception) {}
         }
         bubbleView = null
-        bubbleBinding = null
     }
 
-    private fun removePanel() {
-        panelView?.let {
-            try { windowManager.removeView(it) } catch (_: Exception) {}
-        }
-        panelView = null
-        panelBinding = null
-    }
-
-    private fun overlayWindowType(): Int {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+    private fun overlayType(): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         } else {
             @Suppress("DEPRECATION")
             WindowManager.LayoutParams.TYPE_PHONE
         }
-    }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
-                "ReplyAI Overlay",
-                NotificationManager.IMPORTANCE_LOW
+                CHANNEL_ID, "Reply AI", NotificationManager.IMPORTANCE_LOW
             )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
-    private fun createNotification(): Notification {
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
+    private fun buildNotification(): Notification {
+        val pi = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("ReplyAI")
-            .setContentText("Floating assistant is active")
-            .setSmallIcon(R.drawable.ic_chat)
-            .setContentIntent(pendingIntent)
+            .setContentTitle("Reply AI")
+            .setContentText("Плавающий ассистент активен")
+            .setSmallIcon(R.drawable.ic_reply_ai)
+            .setContentIntent(pi)
             .setOngoing(true)
             .build()
     }
 
     companion object {
         private const val CHANNEL_ID = "replyai_overlay"
-        private const val NOTIFICATION_ID = 1001
+        private const val NOTIFICATION_ID = 42
 
         fun start(context: Context) {
-            val intent = Intent(context, FloatingOverlayService::class.java)
+            val i = Intent(context, FloatingOverlayService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
+                context.startForegroundService(i)
             } else {
-                context.startService(intent)
+                context.startService(i)
             }
         }
 

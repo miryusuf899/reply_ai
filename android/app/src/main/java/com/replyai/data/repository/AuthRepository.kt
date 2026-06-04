@@ -1,26 +1,38 @@
 package com.replyai.data.repository
 
-import com.replyai.data.api.RetrofitClient
+import com.replyai.data.api.ApiService
+import com.replyai.data.models.GoogleAuthRequest
+import com.replyai.data.models.ProfilePatch
 import com.replyai.data.models.RegisterRequest
 import com.replyai.data.models.UserProfile
 import com.replyai.data.models.UserSettings
-import com.replyai.data.models.UserSettingsUpdate
+import com.replyai.data.models.UserSettingsPatch
 import com.replyai.utils.TokenManager
+import com.replyai.utils.parseApiError
+import javax.inject.Inject
+import javax.inject.Singleton
 
-class AuthRepository {
-
-    private val api = RetrofitClient.api
-    private val tokenManager = TokenManager.getInstance()
+@Singleton
+class AuthRepository @Inject constructor(
+    private val api: ApiService,
+    private val tokenManager: TokenManager
+) {
 
     suspend fun login(email: String, password: String): Result<Unit> = runCatching {
-        val response = api.login(
-            mapOf("email" to email, "password" to password)
-        )
-        if (!response.isSuccessful) {
-            throw Exception(parseError(response.errorBody()?.string()))
-        }
-        val body = response.body() ?: throw Exception("Empty response")
+        val response = api.login(mapOf("email" to email, "password" to password))
+        if (!response.isSuccessful) throw Exception(parseApiError(response.errorBody()?.string()))
+        val body = response.body() ?: throw Exception("Пустой ответ")
         tokenManager.saveTokens(body.access, body.refresh, email)
+        loadProfile()
+    }
+
+    suspend fun googleLogin(idToken: String): Result<Unit> = runCatching {
+        val response = api.googleLogin(GoogleAuthRequest(idToken))
+        if (!response.isSuccessful) throw Exception(parseApiError(response.errorBody()?.string()))
+        val body = response.body() ?: throw Exception("Пустой ответ")
+        val access = body.resolveAccess() ?: throw Exception("Нет access токена")
+        val refresh = body.resolveRefresh() ?: ""
+        tokenManager.saveTokens(access, refresh)
         loadProfile()
     }
 
@@ -30,56 +42,44 @@ class AuthRepository {
         password: String,
         password2: String
     ): Result<Unit> = runCatching {
-        val response = api.register(
-            RegisterRequest(email, fullName, password, password2)
-        )
-        if (!response.isSuccessful) {
-            throw Exception(parseError(response.errorBody()?.string()))
+        val response = api.register(RegisterRequest(email, fullName, password, password2))
+        if (!response.isSuccessful) throw Exception(parseApiError(response.errorBody()?.string()))
+    }
+
+    suspend fun logout(): Result<Unit> = runCatching {
+        val refresh = tokenManager.refreshToken
+        if (!refresh.isNullOrBlank()) {
+            api.logout(mapOf("refresh" to refresh))
         }
+        tokenManager.clear()
     }
 
     suspend fun loadProfile(): Result<UserProfile> = runCatching {
         val response = api.getProfile()
-        if (!response.isSuccessful) {
-            throw Exception(parseError(response.errorBody()?.string()))
-        }
-        val profile = response.body() ?: throw Exception("Empty response")
+        if (!response.isSuccessful) throw Exception(parseApiError(response.errorBody()?.string()))
+        val profile = response.body() ?: throw Exception("Пустой ответ")
         tokenManager.userEmail = profile.email
         tokenManager.userName = profile.fullName
         profile
     }
 
+    suspend fun patchProfile(fullName: String?): Result<UserProfile> = runCatching {
+        val response = api.patchProfile(ProfilePatch(fullName = fullName))
+        if (!response.isSuccessful) throw Exception(parseApiError(response.errorBody()?.string()))
+        response.body() ?: throw Exception("Пустой ответ")
+    }
+
     suspend fun getSettings(): Result<UserSettings> = runCatching {
         val response = api.getSettings()
-        if (!response.isSuccessful) {
-            throw Exception(parseError(response.errorBody()?.string()))
-        }
-        response.body() ?: throw Exception("Empty response")
+        if (!response.isSuccessful) throw Exception(parseApiError(response.errorBody()?.string()))
+        response.body() ?: throw Exception("Пустой ответ")
     }
 
-    suspend fun updateSettings(tone: String?, language: String?): Result<UserSettings> = runCatching {
-        val response = api.updateSettings(
-            UserSettingsUpdate(defaultTone = tone, defaultLanguage = language)
-        )
-        if (!response.isSuccessful) {
-            throw Exception(parseError(response.errorBody()?.string()))
-        }
-        response.body() ?: throw Exception("Empty response")
-    }
-
-    fun logout() {
-        tokenManager.clear()
+    suspend fun patchSettings(patch: UserSettingsPatch): Result<UserSettings> = runCatching {
+        val response = api.patchSettings(patch)
+        if (!response.isSuccessful) throw Exception(parseApiError(response.errorBody()?.string()))
+        response.body() ?: throw Exception("Пустой ответ")
     }
 
     fun isLoggedIn(): Boolean = tokenManager.isLoggedIn()
-
-    private fun parseError(body: String?): String {
-        if (body.isNullOrBlank()) return "Request failed"
-        return try {
-            val detail = Regex(""""detail"\s*:\s*"([^"]+)"""").find(body)?.groupValues?.get(1)
-            detail ?: body.take(200)
-        } catch (_: Exception) {
-            body.take(200)
-        }
-    }
 }

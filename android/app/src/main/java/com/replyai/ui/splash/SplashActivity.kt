@@ -10,25 +10,24 @@ import com.replyai.databinding.ActivitySplashBinding
 import com.replyai.ui.auth.LoginActivity
 import com.replyai.ui.main.MainActivity
 import com.replyai.utils.TokenManager
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 @SuppressLint("CustomSplashScreen")
+@AndroidEntryPoint
 class SplashActivity : AppCompatActivity() {
 
-    private lateinit var binding: ActivitySplashBinding
+    @Inject lateinit var tokenManager: TokenManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivitySplashBinding.inflate(layoutInflater)
+        val binding = ActivitySplashBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
         Handler(Looper.getMainLooper()).postDelayed({
-            val destination = if (TokenManager.getInstance().isLoggedIn()) {
-                MainActivity::class.java
-            } else {
-                LoginActivity::class.java
-            }
-            startActivity(Intent(this, destination))
+            val target = if (tokenManager.isLoggedIn()) MainActivity::class.java else LoginActivity::class.java
+            startActivity(Intent(this, target))
             finish()
-        }, 1500)
+        }, 1200)
     }
 }

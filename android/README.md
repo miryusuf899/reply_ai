@@ -1,54 +1,36 @@
-# ReplyAI — Android Client
+# Reply AI — Android
 
-Kotlin Android app for the ReplyAI backend — floating bubble assistant for Telegram, Instagram, and WhatsApp.
+AI-ассистент для Telegram, WhatsApp и Instagram с плавающей кнопкой и Accessibility.
 
-## Open in Android Studio
+## Запуск
 
-1. Open Android Studio → **File → Open** → select the `android/` folder
-2. Let Gradle sync complete
-3. Run on a device or emulator (API 26+)
+1. Откройте папку `android/` в Android Studio
+2. Sync Gradle
+3. Запустите на устройстве API 26+
 
-## Features
+**Base URL:** `http://31.25.238.184:8005/api/`
 
-- JWT auth with EncryptedSharedPreferences
-- Chat sessions CRUD + AI reply generation
-- Floating overlay bubble (Mobizen-style)
-- Accessibility service for auto-insert into messengers
-- Material Design 3 dark theme
+## Возможности
 
-## API Base URL
+- Вход по Email/паролю и Google Sign-In
+- JWT в EncryptedSharedPreferences + авто-refresh при 401
+- Чаты, избранное, настройки, профиль (тариф, usage, планы)
+- Overlay: меню → генерация → вставка в мессенджер
+- Accessibility: чтение сообщений + вставка текста
+- 👍👎 и избранное для ответов AI
 
-`http://31.25.238.184:8005/api/`
+## Настройка на устройстве
 
-Configured in `app/build.gradle.kts` as `BuildConfig.BASE_URL`.
+1. Войти в аккаунт
+2. **Настройки** → Overlay permission → Start floating button
+3. **Accessibility** → Reply AI → включить
+4. Открыть Telegram/WhatsApp → нажать плавающую кнопку
 
-## Permissions Setup
+## Google Sign-In
 
-1. **Overlay**: Settings → Grant Overlay Permission
-2. **Accessibility**: System Settings → Accessibility → ReplyAI → Enable
-3. Start floating bubble from Settings screen
+Web Client ID в `BuildConfig.GOOGLE_WEB_CLIENT_ID`.  
+Добавьте SHA-1 debug/release в Google Cloud Console для package `com.replyai`.
 
-## Project Structure
+## Стек
 
-```
-app/src/main/java/com/replyai/
-├── data/api/          RetrofitClient, ApiService
-├── data/models/       DTOs
-├── data/repository/   AuthRepository, ChatRepository
-├── ui/                Activities & adapters
-├── service/           FloatingOverlay, Accessibility
-├── utils/             TokenManager, Extensions
-└── viewmodel/         MVVM ViewModels
-```
-
-## Backend Endpoints Used
-
-| Endpoint | Purpose |
-|----------|---------|
-| `POST users/login/` | JWT login (email + password) |
-| `POST users/register/` | Registration |
-| `GET/POST chats/sessions/` | Session list & create |
-| `GET/DELETE chats/sessions/{uuid}/` | Session detail & delete |
-| `POST chats/sessions/{uuid}/ask/` | AI reply |
-| `GET/PUT settings/my-settings/` | User preferences |
-| `GET users/profile/` | Account info |
+Kotlin, Hilt, Retrofit, Coroutines, Navigation, Material 3, Lottie, Shimmer

@@ -4,10 +4,15 @@ import android.content.Context
 import android.content.Intent
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
-import com.replyai.ReplyAIApp
 import com.replyai.ui.auth.LoginActivity
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
+import javax.inject.Singleton
 
-class TokenManager(context: Context) {
+@Singleton
+class TokenManager @Inject constructor(
+    @ApplicationContext private val context: Context
+) {
 
     private val prefs = EncryptedSharedPreferences.create(
         context,
@@ -48,7 +53,7 @@ class TokenManager(context: Context) {
         prefs.edit().clear().apply()
     }
 
-    fun handleUnauthorized(context: Context) {
+    fun handleUnauthorized() {
         clear()
         val intent = Intent(context, LoginActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
@@ -62,14 +67,5 @@ class TokenManager(context: Context) {
         private const val KEY_REFRESH = "refresh_token"
         private const val KEY_EMAIL = "user_email"
         private const val KEY_NAME = "user_name"
-
-        @Volatile
-        private var instance: TokenManager? = null
-
-        fun getInstance(context: Context = ReplyAIApp.instance): TokenManager {
-            return instance ?: synchronized(this) {
-                instance ?: TokenManager(context.applicationContext).also { instance = it }
-            }
-        }
     }
 }

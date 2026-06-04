@@ -6,12 +6,16 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.replyai.data.models.UserProfile
 import com.replyai.data.models.UserSettings
+import com.replyai.data.models.UserSettingsPatch
 import com.replyai.data.repository.AuthRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
-class AuthViewModel : ViewModel() {
-
-    private val repository = AuthRepository()
+@HiltViewModel
+class AuthViewModel @Inject constructor(
+    private val repository: AuthRepository
+) : ViewModel() {
 
     private val _loading = MutableLiveData(false)
     val loading: LiveData<Boolean> = _loading
@@ -34,11 +38,18 @@ class AuthViewModel : ViewModel() {
     fun login(email: String, password: String) {
         viewModelScope.launch {
             _loading.value = true
-            _error.value = null
             repository.login(email, password)
-                .onSuccess {
-                    _loginSuccess.value = true
-                }
+                .onSuccess { _loginSuccess.value = true }
+                .onFailure { _error.value = it.message }
+            _loading.value = false
+        }
+    }
+
+    fun googleLogin(idToken: String) {
+        viewModelScope.launch {
+            _loading.value = true
+            repository.googleLogin(idToken)
+                .onSuccess { _loginSuccess.value = true }
                 .onFailure { _error.value = it.message }
             _loading.value = false
         }
@@ -47,7 +58,6 @@ class AuthViewModel : ViewModel() {
     fun register(email: String, fullName: String, password: String, password2: String) {
         viewModelScope.launch {
             _loading.value = true
-            _error.value = null
             repository.register(email, fullName, password, password2)
                 .onSuccess { _registerSuccess.value = true }
                 .onFailure { _error.value = it.message }
@@ -57,39 +67,25 @@ class AuthViewModel : ViewModel() {
 
     fun loadProfile() {
         viewModelScope.launch {
-            repository.loadProfile()
-                .onSuccess { _profile.value = it }
-                .onFailure { _error.value = it.message }
+            repository.loadProfile().onSuccess { _profile.value = it }
         }
     }
 
     fun loadSettings() {
         viewModelScope.launch {
-            _loading.value = true
-            repository.getSettings()
-                .onSuccess { _settings.value = it }
-                .onFailure { _error.value = it.message }
-            _loading.value = false
+            repository.getSettings().onSuccess { _settings.value = it }
         }
     }
 
-    fun updateSettings(tone: String, language: String) {
+    fun patchSettings(patch: UserSettingsPatch) {
         viewModelScope.launch {
-            _loading.value = true
-            repository.updateSettings(tone, language)
-                .onSuccess { _settings.value = it }
-                .onFailure { _error.value = it.message }
-            _loading.value = false
+            repository.patchSettings(patch).onSuccess { _settings.value = it }
         }
     }
 
     fun logout() {
-        repository.logout()
-    }
-
-    fun clearEvents() {
-        _loginSuccess.value = false
-        _registerSuccess.value = false
-        _error.value = null
+        viewModelScope.launch {
+            repository.logout()
+        }
     }
 }

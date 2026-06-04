@@ -7,13 +7,17 @@ import android.view.View
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.replyai.data.models.RequestTypes
+import com.replyai.data.models.ToneChoices
 import com.replyai.databinding.ActivityChatBinding
 import com.replyai.ui.chat.ChatMessageAdapter.ChatListItem
 import com.replyai.utils.copyToClipboard
 import com.replyai.utils.showSnackbar
 import com.replyai.utils.toDisplayTone
 import com.replyai.viewmodel.ChatViewModel
+import dagger.hilt.android.AndroidEntryPoint
 
+@AndroidEntryPoint
 class ChatActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityChatBinding
@@ -21,7 +25,8 @@ class ChatActivity : AppCompatActivity() {
     private lateinit var messageAdapter: ChatMessageAdapter
 
     private var sessionId: String = ""
-    private var selectedTone = "friendly"
+    /** API tone value: formal | friendly | neutral | assertive | empathetic */
+    private var selectedTone: String = ToneChoices.FRIENDLY
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,17 +53,17 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun setupToneChips() {
-        binding.chipFormal.setOnClickListener { selectTone("formal") }
-        binding.chipFriendly.setOnClickListener { selectTone("friendly") }
-        binding.chipEmpathic.setOnClickListener { selectTone("empathic") }
-        selectTone("friendly")
+        binding.chipFormal.setOnClickListener { selectTone(ToneChoices.FORMAL) }
+        binding.chipFriendly.setOnClickListener { selectTone(ToneChoices.FRIENDLY) }
+        binding.chipEmpathic.setOnClickListener { selectTone(ToneChoices.EMPATHETIC) }
+        selectTone(ToneChoices.FRIENDLY)
     }
 
-    private fun selectTone(tone: String) {
-        selectedTone = tone
-        binding.chipFormal.isChecked = tone == "formal"
-        binding.chipFriendly.isChecked = tone == "friendly"
-        binding.chipEmpathic.isChecked = tone == "empathic"
+    private fun selectTone(apiTone: String) {
+        selectedTone = ToneChoices.toApiValue(apiTone)
+        binding.chipFormal.isChecked = selectedTone == ToneChoices.FORMAL
+        binding.chipFriendly.isChecked = selectedTone == ToneChoices.FRIENDLY
+        binding.chipEmpathic.isChecked = selectedTone == ToneChoices.EMPATHETIC
     }
 
     private fun setupObservers() {
@@ -80,7 +85,7 @@ class ChatActivity : AppCompatActivity() {
                 request.userPrompt?.let { prompt ->
                     items.add(ChatListItem.Message(content = prompt, isUser = true, time = request.createdAt))
                 }
-                request.response?.generatedText?.let { text ->
+                request.extractGeneratedText()?.let { text ->
                     items.add(
                         ChatListItem.AiCard(
                             text = text,
@@ -107,7 +112,8 @@ class ChatActivity : AppCompatActivity() {
         }
 
         viewModel.aiResponse.observe(this) { response ->
-            response?.response?.generatedText?.let { text ->
+            val text = response?.extractGeneratedText()
+            if (!text.isNullOrBlank()) {
                 binding.cardAiResult.visibility = View.VISIBLE
                 binding.tvAiResult.text = text
                 binding.tvAiTone.text = response.tone?.toDisplayTone() ?: selectedTone.toDisplayTone()
@@ -119,10 +125,15 @@ class ChatActivity : AppCompatActivity() {
         binding.btnGenerate.setOnClickListener {
             val prompt = binding.etPrompt.text?.toString()?.trim().orEmpty()
             if (prompt.isBlank()) {
-                binding.root.showSnackbar("Enter what you need help replying to")
+                binding.root.showSnackbar(getString(com.replyai.R.string.whats_hard))
                 return@setOnClickListener
             }
-            viewModel.askAI(sessionId, prompt, selectedTone)
+            viewModel.askAI(
+                sessionId = sessionId,
+                userPrompt = prompt,
+                tone = selectedTone,
+                requestType = RequestTypes.REPLY_HELP
+            )
         }
 
         binding.btnCopy.setOnClickListener {
@@ -132,19 +143,21 @@ class ChatActivity : AppCompatActivity() {
 
         binding.btnRegenerate.setOnClickListener {
             val prompt = binding.etPrompt.text?.toString()?.trim().orEmpty()
-            if (prompt.isNotBlank()) viewModel.askAI(sessionId, prompt, selectedTone)
+            if (prompt.isNotBlank()) {
+                viewModel.askAI(sessionId, prompt, selectedTone, RequestTypes.REPLY_HELP)
+            }
         }
 
         binding.cardToneFormal.setOnClickListener {
-            selectTone("formal")
+            selectTone(ToneChoices.FORMAL)
             regenerateIfNeeded()
         }
         binding.cardToneFriendly.setOnClickListener {
-            selectTone("friendly")
+            selectTone(ToneChoices.FRIENDLY)
             regenerateIfNeeded()
         }
         binding.cardToneEmpathic.setOnClickListener {
-            selectTone("empathic")
+            selectTone(ToneChoices.EMPATHETIC)
             regenerateIfNeeded()
         }
     }
@@ -152,7 +165,7 @@ class ChatActivity : AppCompatActivity() {
     private fun regenerateIfNeeded() {
         val prompt = binding.etPrompt.text?.toString()?.trim().orEmpty()
         if (prompt.isNotBlank() && binding.cardAiResult.visibility == View.VISIBLE) {
-            viewModel.askAI(sessionId, prompt, selectedTone)
+            viewModel.askAI(sessionId, prompt, selectedTone, RequestTypes.REPLY_HELP)
         }
     }
 

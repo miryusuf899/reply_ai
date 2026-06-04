@@ -2,39 +2,43 @@ package com.replyai.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
-import android.content.Intent
-import android.os.Build
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.Toast
-import com.replyai.R
+import com.replyai.utils.messengerFromPackage
+import dagger.hilt.android.AndroidEntryPoint
+import java.util.concurrent.CopyOnWriteArrayList
 
+@AndroidEntryPoint
 class ReplyAIAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         serviceInfo = serviceInfo.apply {
-            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+            flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
             notificationTimeout = 100
         }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-
+        if (event == null) return
         val packageName = event.packageName?.toString() ?: return
-        val isMessenger = MESSENGER_PACKAGES.any { packageName.startsWith(it) }
+        if (!MESSENGER_PACKAGES.any { packageName.startsWith(it) }) return
 
-        if (isMessenger) {
-            if (!overlayRunning) {
-                FloatingOverlayService.start(this)
-                overlayRunning = true
-            }
-        } else if (overlayRunning && !packageName.startsWith(packageName)) {
-            // Keep overlay running once started — user controls via Settings
+        currentPackage = packageName
+        currentMessenger = packageName.messengerFromPackage(packageName)
+
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ) {
+            readChatMessages()
         }
     }
 
@@ -45,9 +49,118 @@ class ReplyAIAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
+    /** Синхронно перечитывает все видимые сообщения из активного окна мессенджера. */
+    fun forceRefreshMessages(): Int {
+        return readChatMessages()
+    }
+
+    private fun readChatMessages(): Int {
+        val root = rootInActiveWindow ?: return 0
+        val texts = linkedSetOf<String>()
+        collectMessageTexts(root, texts)
+        root.recycle()
+
+        val filtered = texts
+            .map { it.trim() }
+            .filter { isLikelyChatMessage(it) }
+            .toList()
+
+        if (filtered.isNotEmpty()) {
+            lastMessages.clear()
+            lastMessages.addAll(filtered.takeLast(30))
+        }
+        return lastMessages.size
+    }
+
+    private fun isLikelyChatMessage(text: String): Boolean {
+        if (text.length !in 2..800) return false
+        if (text.matches(Regex("^\\d{1,2}:\\d{2}$"))) return false
+        if (text.matches(Regex("^\\d+$"))) return false
+        val lower = text.lowercase()
+        val uiNoise = listOf(
+            "telegram", "whatsapp", "instagram", "online", "last seen",
+            "typing", "печатает", "в сети", "был(а)", "photo", "video",
+            "voice message", "стикер", "gif"
+        )
+        if (uiNoise.any { lower == it || lower.startsWith("$it ") }) return false
+        return true
+    }
+
+    private fun collectMessageTexts(node: AccessibilityNodeInfo, out: MutableSet<String>) {
+        val text = node.text?.toString()?.trim()
+        val desc = node.contentDescription?.toString()?.trim()
+        listOf(text, desc).forEach { value ->
+            if (!value.isNullOrBlank() && isLikelyChatMessage(value)) {
+                out.add(value)
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            collectMessageTexts(child, out)
+            child.recycle()
+        }
+    }
+
+    fun insertIntoInput(text: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val input = findBestEditableNode(root)
+        if (input == null) {
+            root.recycle()
+            return false
+        }
+
+        val args = android.os.Bundle().apply {
+            putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                text
+            )
+        }
+        var ok = input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+
+        if (!ok) {
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("reply_ai", text))
+            input.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            ok = input.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        }
+
+        if (!ok) {
+            input.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            ok = input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        }
+
+        input.recycle()
+        root.recycle()
+        return ok
+    }
+
+    private fun findBestEditableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var best: AccessibilityNodeInfo? = null
+        fun walk(n: AccessibilityNodeInfo) {
+            if (n.isEditable && n.isEnabled && n.isVisibleToUser) {
+                val hint = n.hintText?.toString().orEmpty().lowercase()
+                val isMessageField = hint.contains("message") || hint.contains("сообщ") ||
+                    hint.contains("text") || n.className?.toString()?.contains("EditText") == true
+                if (isMessageField || best == null) {
+                    best?.recycle()
+                    best = AccessibilityNodeInfo.obtain(n)
+                }
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { child ->
+                    walk(child)
+                    child.recycle()
+                }
+            }
+        }
+        walk(node)
+        return best
+    }
+
     companion object {
         private val MESSENGER_PACKAGES = listOf(
             "org.telegram.messenger",
+            "org.telegram.messenger.web",
             "com.telegram.messenger",
             "com.instagram.android",
             "com.whatsapp"
@@ -58,68 +171,17 @@ class ReplyAIAccessibilityService : AccessibilityService() {
             private set
 
         @Volatile
-        private var overlayRunning = false
+        var currentPackage: String? = null
 
-        fun insertText(text: String) {
-            val service = instance
-            if (service == null) {
-                Toast.makeText(
-                    com.replyai.ReplyAIApp.instance,
-                    "Enable ReplyAI accessibility service",
-                    Toast.LENGTH_LONG
-                ).show()
-                return
-            }
-            service.performInsert(text)
-        }
-    }
+        @Volatile
+        var currentMessenger: String = "telegram"
 
-    private fun performInsert(text: String) {
-        val root = rootInActiveWindow ?: run {
-            Toast.makeText(this, "No active window", Toast.LENGTH_SHORT).show()
-            return
-        }
+        val lastMessages = CopyOnWriteArrayList<String>()
 
-        val inputNode = findEditableNode(root)
-        if (inputNode == null) {
-            Toast.makeText(this, R.string.accessibility_no_input, Toast.LENGTH_SHORT).show()
-            root.recycle()
-            return
-        }
+        fun getMessagesSnapshot(): List<String> = lastMessages.toList()
 
-        val arguments = android.os.Bundle().apply {
-            putCharSequence(
-                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                text
-            )
-        }
+        fun forceRefreshMessages(): Int = instance?.forceRefreshMessages() ?: 0
 
-        val success = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
-        } else {
-            false
-        }
-
-        if (!success) {
-            val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("reply", text))
-            inputNode.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-        }
-
-        inputNode.recycle()
-        root.recycle()
-        Toast.makeText(this, "Reply inserted", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun findEditableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        if (node.isEditable && node.isEnabled) return node
-
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            val found = findEditableNode(child)
-            child.recycle()
-            if (found != null) return found
-        }
-        return null
+        fun insertText(text: String): Boolean = instance?.insertIntoInput(text) == true
     }
 }
