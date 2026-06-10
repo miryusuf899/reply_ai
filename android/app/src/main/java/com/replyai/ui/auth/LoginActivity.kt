@@ -2,91 +2,54 @@ package com.replyai.ui.auth
 
 import android.content.Intent
 import android.os.Bundle
-import android.view.View
-import androidx.activity.result.contract.ActivityResultContracts
+import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.widget.doAfterTextChanged
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions
-import com.replyai.BuildConfig
+import androidx.lifecycle.lifecycleScope
 import com.replyai.databinding.ActivityLoginBinding
 import com.replyai.ui.main.MainActivity
-import com.replyai.utils.showSnackbar
 import com.replyai.viewmodel.AuthViewModel
-import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.launch
 
-@AndroidEntryPoint
 class LoginActivity : AppCompatActivity() {
-
-    private lateinit var binding: ActivityLoginBinding
     private val viewModel: AuthViewModel by viewModels()
-
-    private val googleLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
-        try {
-            val account = task.getResult(Exception::class.java)
-            val idToken = account.idToken
-            if (idToken != null) {
-                viewModel.googleLogin(idToken)
-            } else {
-                binding.root.showSnackbar("Не удалось получить Google токен")
-            }
-        } catch (e: Exception) {
-            binding.root.showSnackbar(e.message ?: "Ошибка Google Sign In")
-        }
-    }
+    private lateinit var binding: ActivityLoginBinding
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityLoginBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        binding.etEmail.doAfterTextChanged { validate() }
-        binding.etPassword.doAfterTextChanged { validate() }
+        binding.btnSignIn.setOnClickListener { performSignIn() }
+        binding.btnGoogle.setOnClickListener { performSignIn() }
 
-        binding.btnSignIn.setOnClickListener {
-            viewModel.login(
-                binding.etEmail.text.toString().trim(),
-                binding.etPassword.text.toString()
-            )
-        }
-
-        binding.btnGoogle.setOnClickListener { signInWithGoogle() }
-        binding.tvRegister.setOnClickListener {
-            startActivity(Intent(this, RegisterActivity::class.java))
-        }
-
-        viewModel.loading.observe(this) { loading ->
-            binding.progressBar.visibility = if (loading) View.VISIBLE else View.GONE
-            binding.btnSignIn.isEnabled = !loading
-            binding.btnGoogle.isEnabled = !loading
-        }
-
-        viewModel.error.observe(this) { it?.let { binding.root.showSnackbar(it) } }
-
-        viewModel.loginSuccess.observe(this) { success ->
-            if (success) {
-                startActivity(Intent(this, MainActivity::class.java))
-                finish()
+        lifecycleScope.launch {
+            viewModel.authState.collect { state ->
+                when (state) {
+                    is AuthViewModel.AuthState.Success -> {
+                        startActivity(Intent(this@LoginActivity, MainActivity::class.java))
+                        finish()
+                    }
+                    is AuthViewModel.AuthState.Error -> {
+                        Toast.makeText(this@LoginActivity, state.message, Toast.LENGTH_SHORT).show()
+                    }
+                    else -> {}
+                }
             }
         }
     }
 
-    private fun validate() {
-        val email = binding.etEmail.text.toString()
-        val pass = binding.etPassword.text.toString()
-        binding.btnSignIn.isEnabled = email.contains('@') && pass.length >= 6
-    }
+    private fun performSignIn() {
+        val email = binding.etEmail.text.toString().trim()
+        val password = binding.etPassword.text.toString()
 
-    private fun signInWithGoogle() {
-        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(BuildConfig.GOOGLE_WEB_CLIENT_ID)
-            .requestEmail()
-            .build()
-        val client = GoogleSignIn.getClient(this, gso)
-        googleLauncher.launch(client.signInIntent)
+        if (email.isEmpty() || password.isEmpty()) {
+            Toast.makeText(this, "Заполни email и пароль", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        lifecycleScope.launch {
+            viewModel.login(email, password)
+        }
     }
 }
